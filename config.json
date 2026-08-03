@@ -1,0 +1,65 @@
+{
+  "control_mode": "desktop",
+  "dry_run": true,
+  "message": "您好，我们正在招聘相关岗位，您的经历与岗位需求较为匹配，方便进一步沟通吗？",
+  "daily_limit": 20,
+  "interval_seconds": 60,
+  "batch_size": 5,
+  "batch_pause_seconds": 300,
+  "max_consecutive_failures": 3,
+  "include_keywords": [],
+  "exclude_keywords": [],
+  "match_mode": "any",
+  "risk_keywords": [
+    "验证码",
+    "安全验证",
+    "请完成验证",
+    "操作频繁",
+    "访问异常",
+    "账号异常",
+    "登录异常",
+    "行为异常",
+    "风险提示",
+    "系统检测"
+  ],
+  "diagnostics_save_tree": false,
+  "desktop_window_title": "BOSS直聘",
+  "desktop_process_name": "boss-zhipin.exe",
+  "selectors": {
+    "candidate_container_control_types": [
+      "ListItem",
+      "Group",
+      "Pane"
+    ],
+    "candidate_name_control_types": [
+      "Text",
+      "Hyperlink"
+    ],
+    "greeting_button_texts": [
+      "打招呼",
+      "立即沟通",
+      "聊一聊"
+    ],
+    "message_input_control_types": [
+      "Edit",
+      "Document"
+    ],
+    "message_input_name_keywords": [
+      "输入消息",
+      "请输入消息",
+      "发消息",
+      "说点什么"
+    ],
+    "send_button_texts": [
+      "发送"
+    ],
+    "message_item_control_types": [
+      "Text",
+      "ListItem",
+      "Document"
+    ],
+    "next_page_texts": [
+      "下一页"
+    ]
+  }
+}
