@@ -20,9 +20,11 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir ^
   main.py
 if errorlevel 1 goto :failed
 
-copy /y config.json "dist\BossInviter\config.json" >nul
+rem 分发包使用安全的首次启动配置，避免把开发机的正式发送配置带给其他人。
+copy /y config.example.json "dist\BossInviter\config.json" >nul
 copy /y config.example.json "dist\BossInviter\config.example.json" >nul
 copy /y README.md "dist\BossInviter\README.md" >nul
+copy /y installer\uninstall.ps1 "dist\BossInviter\uninstall.ps1" >nul
 if not exist "dist\BossInviter\data" mkdir "dist\BossInviter\data"
 if not exist "dist\BossInviter\logs" mkdir "dist\BossInviter\logs"
 if not exist "dist\BossInviter\screenshots" mkdir "dist\BossInviter\screenshots"
@@ -30,8 +32,16 @@ if not exist "dist\BossInviter\screenshots" mkdir "dist\BossInviter\screenshots"
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\BossInviter\*' -DestinationPath 'dist\BossInviter-Windows-x64.zip' -Force"
 if errorlevel 1 goto :failed
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "installer\build_installer.ps1"
+if errorlevel 1 goto :failed
+
+if not exist "dist\BossInviter\BossInviter.exe" goto :failed
+if not exist "dist\BossInviter-Windows-x64.zip" goto :failed
+if not exist "dist\BossInviter-Setup.exe" goto :failed
+
 echo.
-echo 打包完成：dist\BossInviter-Windows-x64.zip
+echo 便携包：dist\BossInviter-Windows-x64.zip
+echo 安装包：dist\BossInviter-Setup.exe
 pause
 exit /b 0
 

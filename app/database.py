@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import Iterator
 
 
 VALID_STATUSES = {
@@ -14,7 +16,16 @@ VALID_STATUSES = {
     "filtered",
     "duplicate",
     "failed",
+    "greeting_unverified",
     "manual_skip",
+}
+
+VALID_REPLY_STATUSES = {
+    "reply_dry_run",
+    "reply_sent",
+    "reply_failed",
+    "reply_unverified",
+    "reply_skipped",
 }
 
 
@@ -29,6 +40,25 @@ class CandidateRecord:
     error_message: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ReplyRecord:
+    status: str
+    message: str
+    error_message: str = ""
+    conversation_key: str = ""
+    incoming_key: str = ""
+    rule_name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardStats:
+    contacted: int = 0
+    sent: int = 0
+    unverified: int = 0
+    failed: int = 0
+    replied: int = 0
+
+
 class Database:
     """每次操作使用独立连接，避免跨线程复用 sqlite3.Connection。"""
 
@@ -38,13 +68,21 @@ class Database:
         self._write_lock = threading.RLock()
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=10000")
-        return connection
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         with self._write_lock, self._connect() as connection:
@@ -73,6 +111,36 @@ class Database:
                     candidate_key TEXT PRIMARY KEY,
                     reserved_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS reply_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    created_date TEXT NOT NULL,
+                    error_message TEXT NOT NULL DEFAULT '',
+                    conversation_key TEXT NOT NULL DEFAULT '',
+                    incoming_key TEXT NOT NULL DEFAULT '',
+                    rule_name TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_reply_records_date_status
+                    ON reply_records(created_date, status);
+                """
+            )
+            reply_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(reply_records)").fetchall()
+            }
+            for column in ("conversation_key", "incoming_key", "rule_name"):
+                if column not in reply_columns:
+                    connection.execute(
+                        f"ALTER TABLE reply_records ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                    )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_one_reply_per_incoming
+                    ON reply_records(incoming_key)
+                    WHERE incoming_key <> '' AND status IN ('reply_sent', 'reply_unverified')
                 """
             )
             # 上次异常退出产生的临时锁不代表已发送，启动时安全释放。
@@ -169,7 +237,9 @@ class Database:
         return row is not None
 
     def already_handled(self, candidate_key: str, *, dry_run: bool) -> bool:
-        statuses = ("sent", "filtered", "manual_skip")
+        # A greeting whose click outcome could not be verified must never be
+        # retried automatically: the platform may already have sent it.
+        statuses = ("sent", "filtered", "greeting_unverified", "manual_skip")
         if dry_run:
             statuses = (*statuses, "dry_run_match")
         return self.has_status(candidate_key, statuses)
@@ -183,6 +253,41 @@ class Database:
             ).fetchone()
         return int(row["count"])
 
+    def today_contacted_count(self, day: date | None = None) -> int:
+        return self.dashboard_stats(day).contacted
+
+    def dashboard_stats(self, day: date | None = None) -> DashboardStats:
+        """Return one transactionally consistent daily dashboard snapshot."""
+        target = (day or date.today()).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT CASE
+                        WHEN status IN ('sent', 'greeting_unverified') THEN candidate_key
+                    END) AS contacted,
+                    COUNT(DISTINCT CASE WHEN status = 'sent' THEN candidate_key END) AS sent,
+                    COUNT(DISTINCT CASE
+                        WHEN status = 'greeting_unverified' THEN candidate_key
+                    END) AS unverified,
+                    COUNT(DISTINCT CASE WHEN status = 'failed' THEN candidate_key END) AS failed
+                FROM candidate_records
+                WHERE created_date = ?
+                """,
+                (target,),
+            ).fetchone()
+            reply_row = connection.execute(
+                "SELECT COUNT(*) AS count FROM reply_records WHERE created_date = ? AND status = 'reply_sent'",
+                (target,),
+            ).fetchone()
+        return DashboardStats(
+            contacted=int(row["contacted"]),
+            sent=int(row["sent"]),
+            unverified=int(row["unverified"]),
+            failed=int(row["failed"]),
+            replied=int(reply_row["count"]),
+        )
+
     def status_counts(self, day: date | None = None) -> dict[str, int]:
         target = (day or date.today()).isoformat()
         with self._connect() as connection:
@@ -191,3 +296,87 @@ class Database:
                 (target,),
             ).fetchall()
         return {str(row["status"]): int(row["count"]) for row in rows}
+
+    def record_reply(self, record: ReplyRecord, *, when: datetime | None = None) -> int:
+        if record.status not in VALID_REPLY_STATUSES:
+            raise ValueError(f"未知回复状态：{record.status}")
+        moment = when or datetime.now().astimezone()
+        with self._write_lock, self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO reply_records (
+                    status, message, created_at, created_date, error_message,
+                    conversation_key, incoming_key, rule_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.status,
+                    record.message,
+                    moment.isoformat(timespec="seconds"),
+                    moment.date().isoformat(),
+                    record.error_message,
+                    record.conversation_key,
+                    record.incoming_key,
+                    record.rule_name,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def has_replied_to(self, incoming_key: str) -> bool:
+        if not incoming_key:
+            return False
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM reply_records
+                WHERE incoming_key = ? AND status IN ('reply_sent', 'reply_unverified')
+                LIMIT 1
+                """,
+                (incoming_key,),
+            ).fetchone()
+        return row is not None
+
+    def today_reply_sent_count(self, day: date | None = None) -> int:
+        target = (day or date.today()).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM reply_records WHERE created_date = ? AND status = 'reply_sent'",
+                (target,),
+            ).fetchone()
+        return int(row["count"])
+
+    def conversation_reply_sent_count(
+        self,
+        conversation_key: str,
+        day: date | None = None,
+    ) -> int:
+        if not conversation_key:
+            return 0
+        target = (day or date.today()).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM reply_records
+                WHERE created_date = ?
+                  AND conversation_key = ?
+                  AND status = 'reply_sent'
+                """,
+                (target, conversation_key),
+            ).fetchone()
+        return int(row["count"])
+
+    def last_reply_sent_at(self) -> datetime | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT created_at
+                FROM reply_records
+                WHERE status = 'reply_sent'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return datetime.fromisoformat(str(row["created_at"]))
