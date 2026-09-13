@@ -1,4 +1,20 @@
-# BOSS 直聘 Windows 客户端自动邀约助手
+# BOSS 直聘助手
+
+独立的 Windows 桌面招聘辅助工具，通过可访问性控件连接已经登录的 BOSS 直聘客户端，支持候选人关键词筛选、去重、邀约控制、SQLite 记录和异常暂停。默认测试模式，先诊断页面再使用。
+
+## 文件与功能
+
+| 目录/文件 | 功能 |
+| --- | --- |
+| `main.py`、`app/ui.py` | 程序入口和桌面界面 |
+| `app/desktop.py`、`app/selectors.py` | Windows UIA 连接、控件识别和页面诊断 |
+| `app/candidate.py`、`app/automation.py` | 候选人筛选、去重及执行流程 |
+| `app/safety.py`、`app/database.py` | 停止条件、操作限制与 SQLite 记录 |
+| `config.example.json`、`config.json` | 配置模板与当前配置 |
+| `tests/` | 配置、筛选、数据库和流程测试 |
+| `install.bat`、`run.bat`、`build.bat` | Windows 安装、启动与打包入口 |
+
+以下保留原有运行要求、配置和操作边界。本轮整理未执行任何招聘邀约或消息发送。
 
 这是一个 Windows 单机版、纯 Python 的招聘邀约辅助工具。它连接用户已经打开并登录的 BOSS 直聘 Windows 客户端，通过 Windows UI Automation 读取可访问性控件，不使用固定屏幕坐标。
 

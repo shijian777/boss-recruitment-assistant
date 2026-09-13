@@ -41,7 +41,7 @@ class BossInviterApp:
         self._closing = False
         self._formal_confirmed = False
 
-        self.root.title("BOSS 直聘自动邀约助手")
+        self.root.title("BOSS 直聘助手")
         self.root.geometry("940x700")
         self.root.minsize(820, 620)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
